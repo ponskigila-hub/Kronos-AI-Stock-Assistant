@@ -5546,3 +5546,88 @@ body.page-chat .main {
 }
 :root:not([data-theme="dark"]) .fx-lead { color: #1c1a17; }
 :root:not([data-theme="dark"]) .fx-list li { color: #6b6358; }
+
+/* Analyst research workflow on home */
+.wf-track {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+  counter-reset: none;
+}
+.wf-step { margin: 0; }
+.wf-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+  padding: 16px 16px 14px;
+  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--line, #30363d) 80%, transparent);
+  background: color-mix(in srgb, var(--ink-2, #161b22) 50%, transparent);
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+.wf-card:hover {
+  border-color: color-mix(in srgb, var(--gold, #d9a94b) 45%, transparent);
+  transform: translateY(-1px);
+}
+.wf-num {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 0.75rem;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  color: var(--gold, #d9a94b);
+}
+.wf-card h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 650;
+  color: var(--bone, #e6edf3);
+}
+.wf-card p {
+  margin: 0;
+  flex: 1;
+  font-size: 0.86rem;
+  line-height: 1.45;
+  color: var(--bone-dim, #8b949e);
+}
+.wf-go {
+  margin-top: 4px;
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--gold, #d9a94b);
+}
+
+.fx-card-link {
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+.fx-card-link:hover {
+  border-color: color-mix(in srgb, var(--gold, #d9a94b) 45%, transparent);
+  transform: translateY(-1px);
+}
+
+.page-home .wf-card {
+  background: rgba(20, 18, 14, 0.55);
+  border-color: rgba(212, 180, 120, 0.14);
+}
+.page-home .wf-card h3 { color: #f3efe4; }
+.page-home .wf-card p { color: #a89c88; }
+
+:root:not([data-theme="dark"]) .page-home .wf-card {
+  background: #fff;
+  border-color: color-mix(in srgb, var(--line) 70%, #d4c4a8);
+}
+:root:not([data-theme="dark"]) .page-home .wf-card h3 { color: #1c1a17; }
+:root:not([data-theme="dark"]) .page-home .wf-card p { color: #6b6358; }
+:root:not([data-theme="dark"]) .wf-card {
+  background: #fff;
+  border-color: color-mix(in srgb, var(--line) 70%, #d4c4a8);
+}
+:root:not([data-theme="dark"]) .wf-card h3 { color: #1c1a17; }
+:root:not([data-theme="dark"]) .wf-card p { color: #6b6358; }
