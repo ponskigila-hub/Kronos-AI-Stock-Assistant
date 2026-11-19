@@ -77,39 +77,198 @@
 <section class="home-section">
   <div class="home-section-head">
     <h2>Toolkit</h2>
-    <p>Grouped the way you work — open a group in the nav for the rest.</p>
+    <p>Outcome-first tools — open any card to go deeper.</p>
   </div>
   <div class="toolkit-grid">
     <a class="toolkit-card" href="{{ url_for('forecast') }}">
       <div class="toolkit-icon" aria-hidden="true">◈</div>
       <h3>Forecast</h3>
-      <p>Kronos multi-step path with news &amp; analyst context.</p>
+      <p>Near-term path with a high / centre / low band — scenarios, not guarantees.</p>
     </a>
-    <a class="toolkit-card" href="{{ url_for('invest_page') }}">
+    <a class="toolkit-card" href="{{ url_for('research_page') }}">
+      <div class="toolkit-icon" aria-hidden="true">▣</div>
+      <h3>Research Hub</h3>
+      <p>Compare names, run templates, and keep thesis notes in one desk.</p>
+    </a>
+    <a class="toolkit-card" href="{{ url_for('stock_page') }}">
       <div class="toolkit-icon" aria-hidden="true">◎</div>
-      <h3>Invest plan</h3>
-      <p>Long-term entry zone and staged sell targets.</p>
+      <h3>Stock view</h3>
+      <p>Chart, performance, stats, analyst snapshot, and technicals together.</p>
     </a>
-    <a class="toolkit-card" href="{{ url_for('daytrade_page') }}">
-      <div class="toolkit-icon" aria-hidden="true">⌁</div>
-      <h3>Day trade desk</h3>
-      <p>ORB scanner, entry timer, exit &amp; risk size.</p>
+    <a class="toolkit-card" href="{{ url_for('valuation') }}">
+      <div class="toolkit-icon" aria-hidden="true">☰</div>
+      <h3>Peer valuation</h3>
+      <p>Growth, margins, and multiples versus close competitors.</p>
     </a>
     <a class="toolkit-card" href="{{ url_for('chat') }}">
       <div class="toolkit-icon" aria-hidden="true">◐</div>
       <h3>Chat</h3>
-      <p>Ask in plain language — beginner mode by default.</p>
+      <p>Ask in plain language — sessions you can reopen or delete.</p>
     </a>
     <a class="toolkit-card" href="{{ url_for('watchlist') }}">
       <div class="toolkit-icon" aria-hidden="true">✦</div>
       <h3>Watchlist</h3>
-      <p>Track names, notes, and entry zones.</p>
+      <p>Names, thesis notes, and today’s % on the nav strip.</p>
     </a>
-    <a class="toolkit-card" href="{{ url_for('valuation') }}">
-      <div class="toolkit-icon" aria-hidden="true">☰</div>
-      <h3>Valuation</h3>
-      <p>Relative multiples vs a peer set.</p>
+    <a class="toolkit-card" href="{{ url_for('screener') }}">
+      <div class="toolkit-icon" aria-hidden="true">⌕</div>
+      <h3>Screener</h3>
+      <p>Narrow the universe before you spend time on a deep dive.</p>
     </a>
+    <a class="toolkit-card" href="{{ url_for('daytrade_page') }}">
+      <div class="toolkit-icon" aria-hidden="true">⌁</div>
+      <h3>Day trade desk</h3>
+      <p>Intraday checklist and risk fields — not a broker.</p>
+    </a>
+    <a class="toolkit-card" href="{{ url_for('invest_page') }}">
+      <div class="toolkit-icon" aria-hidden="true">◎</div>
+      <h3>Invest plan</h3>
+      <p>Entry zone ideas and staged targets for longer horizons.</p>
+    </a>
+    <a class="toolkit-card" href="{{ url_for('simulation_page') }}">
+      <div class="toolkit-icon" aria-hidden="true">▢</div>
+      <h3>Paper portfolio</h3>
+      <p>Demo positions with real prices — grade ideas later.</p>
+    </a>
+    <a class="toolkit-card" href="{{ url_for('backtest') }}">
+      <div class="toolkit-icon" aria-hidden="true">↻</div>
+      <h3>Backtest</h3>
+      <p>Walk-forward style checks under past market conditions.</p>
+    </a>
+    <a class="toolkit-card" href="{{ url_for('forecast') }}">
+      <div class="toolkit-icon" aria-hidden="true">⌘</div>
+      <h3>Tool search</h3>
+      <p>Jump anywhere with Ctrl+K — less menu hunting.</p>
+    </a>
+  </div>
+</section>
+
+<section class="home-section home-features">
+  <div class="home-section-head">
+    <h2>What each tool is for</h2>
+    <p>Short explainers — what you get, not the plumbing.</p>
+  </div>
+  <div class="fx-grid">
+    <article class="fx-card">
+      <h3 class="fx-title">Forecast</h3>
+      <p class="fx-lead">See a path and a range—not a single guess.</p>
+      <ul class="fx-list">
+        <li>High / centre / low band for scenarios</li>
+        <li>Context beside the chart when available</li>
+        <li>Research aid — not a trade order</li>
+      </ul>
+      <a class="fx-cta" href="{{ url_for('forecast') }}">Run forecast →</a>
+    </article>
+    <article class="fx-card">
+      <h3 class="fx-title">Stock view</h3>
+      <p class="fx-lead">Price, stats, and structure in one place.</p>
+      <ul class="fx-list">
+        <li>Performance windows and key stats</li>
+        <li>Analyst consensus snapshot</li>
+        <li>Technical panel under the same roof</li>
+      </ul>
+      <a class="fx-cta" href="{{ url_for('stock_page') }}">Open Stock →</a>
+    </article>
+    <article class="fx-card">
+      <h3 class="fx-title">Technical analysis</h3>
+      <p class="fx-lead">Structure the chart without the noise.</p>
+      <ul class="fx-list">
+        <li>50 / 200 trend, MACD, RSI</li>
+        <li>Bollinger / Keltner squeeze flags</li>
+        <li>VWAP, OBV, simple volume profile</li>
+      </ul>
+      <a class="fx-cta" href="{{ url_for('stock_page') }}">Open Stock →</a>
+    </article>
+    <article class="fx-card">
+      <h3 class="fx-title">Research Hub</h3>
+      <p class="fx-lead">Compare, template, and thesis—one desk.</p>
+      <ul class="fx-list">
+        <li>Side-by-side tickers, same horizon</li>
+        <li>Templates run in-page</li>
+        <li>Thesis notes stay visible</li>
+      </ul>
+      <a class="fx-cta" href="{{ url_for('chat') }}">Open Research →</a>
+    </article>
+    <article class="fx-card">
+      <h3 class="fx-title">Wall Street breakdown</h3>
+      <p class="fx-lead">Analyst-style depth in minutes.</p>
+      <ul class="fx-list">
+        <li>Business, growth, margins, cash</li>
+        <li>Competition, catalysts, risks</li>
+        <li>Ends with numbers to monitor</li>
+      </ul>
+      <a class="fx-cta" href="{{ url_for('chat') }}">Run breakdown →</a>
+    </article>
+    <article class="fx-card">
+      <h3 class="fx-title">Dig the financials</h3>
+      <p class="fx-lead">Trends across statements, not one quarter.</p>
+      <ul class="fx-list">
+        <li>Income, balance sheet, cash flow</li>
+        <li>Growth, debt, dilution flags</li>
+        <li>Plain summary of what moved</li>
+      </ul>
+      <a class="fx-cta" href="{{ url_for('chat') }}">Dig financials →</a>
+    </article>
+    <article class="fx-card">
+      <h3 class="fx-title">Peer valuation</h3>
+      <p class="fx-lead">Judge the name against its peers.</p>
+      <ul class="fx-list">
+        <li>Same metrics and periods</li>
+        <li>Edges and threats spelled out</li>
+        <li>Context for your own risk rules</li>
+      </ul>
+      <a class="fx-cta" href="{{ url_for('valuation') }}">Compare peers →</a>
+    </article>
+    <article class="fx-card">
+      <h3 class="fx-title">Options positioning</h3>
+      <p class="fx-lead">Read listed options with care.</p>
+      <ul class="fx-list">
+        <li>Put/call volume and open interest</li>
+        <li>Near-ATM IV skew</li>
+        <li>Gamma heuristic — not official GEX</li>
+      </ul>
+      <a class="fx-cta" href="{{ url_for('chat') }}">Check options →</a>
+    </article>
+    <article class="fx-card">
+      <h3 class="fx-title">Chat</h3>
+      <p class="fx-lead">Ask the market in plain language.</p>
+      <ul class="fx-list">
+        <li>Sessions by day, delete anytime</li>
+        <li>Quick actions on the welcome screen</li>
+        <li>Beginner-friendly by default</li>
+      </ul>
+      <a class="fx-cta" href="{{ url_for('chat') }}">Start chat →</a>
+    </article>
+    <article class="fx-card">
+      <h3 class="fx-title">Watchlist</h3>
+      <p class="fx-lead">Keep your names in view.</p>
+      <ul class="fx-list">
+        <li>Thesis notes beside the list</li>
+        <li>Daily % strip under the nav</li>
+        <li>One tap into Stock</li>
+      </ul>
+      <a class="fx-cta" href="{{ url_for('watchlist') }}">Open watchlist →</a>
+    </article>
+    <article class="fx-card">
+      <h3 class="fx-title">Screener</h3>
+      <p class="fx-lead">Narrow the universe before deep work.</p>
+      <ul class="fx-list">
+        <li>Trend, momentum, risk filters</li>
+        <li>Presets for common scans</li>
+        <li>Hand-off to Stock or Research</li>
+      </ul>
+      <a class="fx-cta" href="{{ url_for('screener') }}">Open screener →</a>
+    </article>
+    <article class="fx-card">
+      <h3 class="fx-title">Backtest &amp; paper</h3>
+      <p class="fx-lead">Test ideas before you size them.</p>
+      <ul class="fx-list">
+        <li>Walk-forward style validation</li>
+        <li>Demo portfolio with live prices</li>
+        <li>Research aid — not live brokerage</li>
+      </ul>
+      <a class="fx-cta" href="{{ url_for('backtest') }}">Validate →</a>
+    </article>
   </div>
 </section>
 
