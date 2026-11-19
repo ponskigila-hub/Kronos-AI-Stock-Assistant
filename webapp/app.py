@@ -17,7 +17,13 @@ import time
 import uuid
 from datetime import timedelta
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
+_ROOT_DIR = os.path.dirname(_APP_DIR)
+# Project root for assistant/, backtesting/; webapp/ for jobs.py
+if _ROOT_DIR not in sys.path:
+    sys.path.insert(0, _ROOT_DIR)
+if _APP_DIR not in sys.path:
+    sys.path.insert(0, _APP_DIR)
 
 from flask import (
     Flask, render_template, request, redirect, url_for, session,
@@ -160,10 +166,9 @@ def _run_forecast_ticker_job(job_id, ticker, pred_len, lookback, detailed):
         if detailed:
             from assistant.config import DETAILED_FORECAST_RUNS
             fc = forecaster_mod.run_forecast(hist_df, pred_len=pred_len, n_runs=DETAILED_FORECAST_RUNS)
-            image_path = charts.build_detailed_forecast_png(ticker, hist_df, fc)
         else:
-            fc = forecaster_mod.run_forecast(hist_df, pred_len=pred_len)
-            image_path = charts.build_forecast_png(ticker, hist_df, fc)
+            # Default path also benefits from a small multi-sample for a real range band
+            fc = forecaster_mod.run_forecast(hist_df, pred_len=pred_len, n_runs=max(3, 1))
 
         last_close = float(hist_df["close"].iloc[-1])
         # Raw Kronos % before context adjustments (for signal alignment)
@@ -172,6 +177,8 @@ def _run_forecast_ticker_job(job_id, ticker, pred_len, lookback, detailed):
 
         context_block = ""
         ctx_dict = None
+        analyst = None
+        analyst_target = None
         try:
             from assistant.context_signal import (
                 build_context_signal, widen_forecast_bands, format_context_block,
@@ -181,6 +188,15 @@ def _run_forecast_ticker_job(job_id, ticker, pred_len, lookback, detailed):
             earnings_warning = fundamentals.earnings_within_horizon(ticker, pred_len)
             try:
                 analyst = fundamentals.get_analyst_targets(ticker)
+                if analyst and isinstance(analyst, dict):
+                    # Common keys: targetMeanPrice / mean / target
+                    for k in ("targetMeanPrice", "mean", "target", "target_mean"):
+                        if analyst.get(k) is not None:
+                            try:
+                                analyst_target = float(analyst[k])
+                                break
+                            except (TypeError, ValueError):
+                                pass
             except Exception:
                 analyst = None
             try:
@@ -203,13 +219,20 @@ def _run_forecast_ticker_job(job_id, ticker, pred_len, lookback, detailed):
                 fc, _cov = apply_context_covariate_nudge(fc, ctx)
             if ctx.band_widen_factor > 1.0 and not detailed:
                 fc = widen_forecast_bands(fc, ctx.band_widen_factor)
-            # Rebuild chart after path/band adjustments
-            if not detailed:
-                image_path = charts.build_forecast_png(ticker, hist_df, fc)
             context_block = " " + format_context_block(ctx, beginner=True)
             ctx_dict = ctx.to_dict()
         except Exception:
             context_block = ""
+
+        # Rebuild chart after any path/band adjustments (both modes)
+        if detailed:
+            image_path = charts.build_detailed_forecast_png(
+                ticker, hist_df, fc, analyst_target=analyst_target
+            )
+        else:
+            image_path = charts.build_forecast_png(
+                ticker, hist_df, fc, analyst_target=analyst_target
+            )
 
         if detailed and fc.get("mean_df") is not None:
             forecast_close = float(fc["mean_df"]["close"].iloc[-1])
@@ -217,16 +240,33 @@ def _run_forecast_ticker_job(job_id, ticker, pred_len, lookback, detailed):
             forecast_close = float(fc["pred_df"]["close"].iloc[-1])
         pct = (forecast_close - last_close) / last_close * 100 if last_close else 0.0
 
+        # Range numbers for the new KPI strip (end of horizon)
+        range_high = range_low = None
+        if fc.get("high_df") is not None:
+            range_high = float(fc["high_df"]["close"].iloc[-1])
+        if fc.get("low_df") is not None:
+            range_low = float(fc["low_df"]["close"].iloc[-1])
+        range_centre = forecast_close
+
         result_text = (
             f"{ticker}: {last_close:.2f} -> {forecast_close:.2f} over {pred_len} trading days "
             f"({pct:+.2f}%). Lookback used: {fc['lookback_used']} days."
         )
-        if detailed:
-            result_text += f" ({fc['n_runs']} sampled paths shown.)"
+        if detailed or fc.get("n_runs", 1) > 1:
+            result_text += f" ({fc.get('n_runs', 1)} sampled paths.)"
         result_text += context_block
         _finish_forecast_job(job_id, status="done", result={
-            "text": result_text, "ticker": ticker, "image_path": image_path,
+            "text": result_text,
+            "ticker": ticker,
+            "image_path": image_path,
             "context_signal": ctx_dict,
+            "last_close": last_close,
+            "range_high": range_high,
+            "range_centre": range_centre,
+            "range_low": range_low,
+            "analyst_target": analyst_target,
+            "pred_len": pred_len,
+            "n_runs": fc.get("n_runs", 1),
         })
     except TickerNotFoundError as e:
         _finish_forecast_job(job_id, status="error", error=str(e))
@@ -330,8 +370,64 @@ def chat():
 @app.route("/api/chat/history")
 def api_chat_history():
     context = get_context(_user_id())
-    return jsonify({"history": context.history, "beginner_mode": context.beginner_mode})
+    return jsonify({
+        "history": context.history,
+        "beginner_mode": context.beginner_mode,
+        "session_id": context.active_session_id,
+        "sessions": context.list_sessions_grouped(),
+    })
 
+
+@app.route("/api/chat/sessions", methods=["GET"])
+def api_chat_sessions():
+    context = get_context(_user_id())
+    return jsonify({
+        "sessions": context.list_sessions_grouped(),
+        "active_session_id": context.active_session_id,
+        "beginner_mode": context.beginner_mode,
+    })
+
+
+@app.route("/api/chat/sessions/new", methods=["POST"])
+def api_chat_sessions_new():
+    context = get_context(_user_id())
+    sess = context.new_session(title="New chat")
+    return jsonify({
+        "session": sess,
+        "sessions": context.list_sessions_grouped(),
+        "history": [],
+        "beginner_mode": context.beginner_mode,
+    })
+
+
+@app.route("/api/chat/sessions/<session_id>/switch", methods=["POST"])
+def api_chat_sessions_switch(session_id):
+    context = get_context(_user_id())
+    ok = context.switch_session(session_id)
+    if not ok:
+        return jsonify({"error": "Session not found"}), 404
+    return jsonify({
+        "session_id": context.active_session_id,
+        "history": context.history,
+        "beginner_mode": context.beginner_mode,
+        "sessions": context.list_sessions_grouped(),
+    })
+
+
+
+@app.route("/api/chat/sessions/<session_id>/delete", methods=["POST", "DELETE"])
+def api_chat_sessions_delete(session_id):
+    context = get_context(_user_id())
+    ok = context.delete_session(session_id)
+    if not ok:
+        return jsonify({"error": "Session not found"}), 404
+    return jsonify({
+        "ok": True,
+        "session_id": context.active_session_id,
+        "history": context.history,
+        "beginner_mode": context.beginner_mode,
+        "sessions": context.list_sessions_grouped(),
+    })
 
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
@@ -577,9 +673,11 @@ def api_stock_profile(ticker):
         "sector": fund.get("sector"),
         "industry": fund.get("industry"),
         "description": description,
+        "current_price": fund.get("current_price"),
         "market_cap": fund.get("market_cap"),
         "pe_ratio": fund.get("pe_ratio"),
         "forward_pe": fund.get("forward_pe"),
+        "eps": fund.get("eps"),
         "beta": fund.get("beta"),
         "dividend_yield": fund.get("dividend_yield"),
         "fifty_two_week_low": fund.get("fifty_two_week_low"),
@@ -587,6 +685,8 @@ def api_stock_profile(ticker):
         "employees": fund.get("employees"),
         "country": fund.get("country"),
         "exchange": fund.get("exchange"),
+        "profit_margin": fund.get("profit_margin"),
+        "revenue_growth": fund.get("revenue_growth"),
         "analyst": {
             "target_mean": analyst.get("target_mean"),
             "target_low": analyst.get("target_low"),
@@ -601,6 +701,97 @@ def api_stock_profile(ticker):
 # ---------------------------------------------------------------------------
 # Stock Screener (assistant/screener/)
 # ---------------------------------------------------------------------------
+
+@app.route("/stock")
+@app.route("/stock/<ticker>")
+def stock_page(ticker=None):
+    """Pluang-style stock performance page."""
+    return render_template(
+        "stock.html",
+        active="stock",
+        prefill_ticker=(ticker or request.args.get("ticker") or "").strip().upper(),
+    )
+
+
+@app.route("/api/stock/performance/<ticker>")
+def api_stock_performance(ticker):
+    """Period returns (1W…5Y) + 52w context for the Stock tab."""
+    ticker = (ticker or "").strip().upper()
+    try:
+        df = data_fetcher.fetch_history(ticker, lookback_days=1300, interval="1d")
+    except TickerNotFoundError as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
+    if df is None or df.empty or len(df) < 2:
+        return jsonify({"error": f"No history for {ticker}."}), 404
+
+    import pandas as pd
+    closes = df["close"].astype(float)
+    last = float(closes.iloc[-1])
+    ts = pd.to_datetime(df["timestamps"])
+
+    def ret_after(n_bars):
+        if len(closes) <= n_bars:
+            return None
+        base = float(closes.iloc[-(n_bars + 1)])
+        if not base:
+            return None
+        return round((last - base) / base * 100.0, 2)
+
+    def ret_since(mask):
+        sub = closes[mask]
+        if sub is None or len(sub) < 1:
+            return None
+        base = float(sub.iloc[0])
+        if not base:
+            return None
+        return round((last - base) / base * 100.0, 2)
+
+    year = pd.Timestamp.now().year
+    ytd_mask = ts.dt.year == year
+
+    periods = {
+        "1W": ret_after(5),
+        "1M": ret_after(21),
+        "3M": ret_after(63),
+        "6M": ret_after(126),
+        "YTD": ret_since(ytd_mask.values if hasattr(ytd_mask, "values") else ytd_mask),
+        "1Y": ret_after(252),
+        "5Y": ret_after(1260) if len(closes) > 1260 else ret_after(max(len(closes) - 2, 1)),
+    }
+    # Prefer true 5Y when enough bars; else MAX available
+    if periods["5Y"] is None and len(closes) > 2:
+        base = float(closes.iloc[0])
+        periods["5Y"] = round((last - base) / base * 100.0, 2) if base else None
+
+    high_52 = float(closes.tail(252).max()) if len(closes) >= 20 else float(closes.max())
+    low_52 = float(closes.tail(252).min()) if len(closes) >= 20 else float(closes.min())
+
+    return jsonify({
+        "ticker": ticker,
+        "last": round(last, 2),
+        "periods": periods,
+        "fifty_two_week_high": round(high_52, 2),
+        "fifty_two_week_low": round(low_52, 2),
+        "from_high_pct": round((last - high_52) / high_52 * 100, 2) if high_52 else None,
+        "from_low_pct": round((last - low_52) / low_52 * 100, 2) if low_52 else None,
+    })
+
+
+
+@app.route("/api/stock/technical/<ticker>")
+def api_stock_technical(ticker):
+    """Price/volume technical read: trend, S/R, momentum, patterns."""
+    from assistant import technical_analysis as ta
+    ticker = (ticker or "").strip().upper()
+    try:
+        return jsonify(ta.analyze_technicals(ticker))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/screener", methods=["GET"])
 def screener():
     return render_template(
@@ -804,6 +995,13 @@ def forecast_job(job_id):
         "ticker": result["ticker"],
         "image_url": _to_url(result.get("image_path")),
         "context_signal": result.get("context_signal"),
+        "last_close": result.get("last_close"),
+        "range_high": result.get("range_high"),
+        "range_centre": result.get("range_centre"),
+        "range_low": result.get("range_low"),
+        "analyst_target": result.get("analyst_target"),
+        "pred_len": result.get("pred_len"),
+        "n_runs": result.get("n_runs"),
     })
 
 
@@ -873,9 +1071,18 @@ _valuation_provider_lock = threading.Lock()
 
 
 def _run_relative_valuation_job(ticker, peers):
+    """Competitive analysis (primary) + classic relative multiples (secondary)."""
+    from assistant import competitive_analysis as ca
     from assistant.valuation import fetch_relative_valuation
-    with _valuation_provider_lock:
-        return fetch_relative_valuation(ticker, peers)
+    competitive = ca.analyze_competitors(ticker, peers)
+    relative = None
+    try:
+        with _valuation_provider_lock:
+            relative = fetch_relative_valuation(ticker, peers)
+    except Exception as e:
+        relative = {"error": str(e)}
+    competitive["relative_valuation"] = relative
+    return competitive
 
 
 @app.route("/valuation", methods=["GET"])
@@ -891,10 +1098,10 @@ def valuation_run():
     peers = [item.strip().upper() for item in peer_text.replace(";", ",").split(",") if item.strip()]
     if not ticker:
         return jsonify({"error": "Enter the target ticker."}), 400
-    if not 3 <= len(peers) <= 8:
-        return jsonify({"error": "Enter between 3 and 8 peer tickers, separated by commas."}), 400
+    if not 3 <= len(peers) <= 5:
+        return jsonify({"error": "Enter 3 to 5 closest competitors, separated by commas."}), 400
     if ticker in peers or len(set(peers)) != len(peers):
-        return jsonify({"error": "Target and peer tickers must be unique."}), 400
+        return jsonify({"error": "Target and competitor tickers must be unique."}), 400
     job_id = _valuation_jobs.submit(_run_relative_valuation_job, ticker, peers)
     return jsonify({"job_id": job_id})
 
@@ -1279,7 +1486,34 @@ def api_insights():
         result = deep_research.build_fundamental_insight(
             ticker, peer_tickers=peers, include_macro=bool(include_macro),
         )
+        # Multi-period statement dig when viewing a stock on Insights
+        try:
+            from assistant import financials_dig
+            result["financials_dig"] = financials_dig.dig_financials(ticker)
+        except Exception as fe:
+            result["financials_dig"] = {
+                "ticker": ticker,
+                "error": str(fe),
+                "text": f"Financial statement dig unavailable: {fe}",
+                "flags": [],
+            }
         return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/financials/dig", methods=["POST"])
+def api_financials_dig():
+    """Standalone dig-through of income / balance / cash flow (multi-period)."""
+    from assistant import financials_dig
+    payload = request.get_json(silent=True) or {}
+    ticker = (payload.get("ticker") or "").strip().upper()
+    if not ticker:
+        return jsonify({"error": "ticker required"}), 400
+    try:
+        return jsonify(financials_dig.dig_financials(ticker))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1304,6 +1538,27 @@ def research_page():
 def api_research_templates():
     from assistant import research as research_mod
     return jsonify({"templates": research_mod.list_templates()})
+
+
+@app.route("/api/research/run", methods=["POST"])
+def api_research_run():
+    """Run a research template in-page (no chat redirect)."""
+    from assistant import research as research_mod
+    payload = request.get_json(silent=True) or {}
+    template_id = (payload.get("template_id") or "").strip()
+    ticker = (payload.get("ticker") or "").strip().upper()
+    ticker2 = (payload.get("ticker2") or "").strip().upper() or None
+    if not template_id:
+        return jsonify({"error": "template_id is required"}), 400
+    if not ticker:
+        return jsonify({"error": "Enter a ticker first."}), 400
+    try:
+        result = research_mod.run_research_template(template_id, ticker, ticker2)
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": f"Template run failed: {e}"}), 500
 
 
 @app.route("/api/research/thesis", methods=["GET", "POST", "DELETE"])
@@ -1344,7 +1599,11 @@ def api_research_compare():
     tickers = payload.get("tickers") or []
     if isinstance(tickers, str):
         tickers = [x.strip() for x in tickers.replace(";", ",").split(",") if x.strip()]
-    pred_len = int(payload.get("pred_len") or 14)
+    try:
+        pred_len = int(payload.get("pred_len") or payload.get("horizon") or 14)
+    except (TypeError, ValueError):
+        pred_len = 14
+    pred_len = max(5, min(pred_len, 60))
     if not tickers:
         return jsonify({"error": "tickers required"}), 400
     try:
@@ -1357,6 +1616,19 @@ def api_research_compare():
 # ---------------------------------------------------------------------------
 # Invest / long-term position plan (entry zone + sell targets)
 # ---------------------------------------------------------------------------
+
+@app.route("/api/research/options/<ticker>")
+def api_research_options(ticker):
+    """Options positioning: P/C, IV skew, heuristic dealer gamma."""
+    from assistant import options_positioning as op
+    ticker = (ticker or "").strip().upper()
+    try:
+        return jsonify(op.analyze_options_positioning(ticker))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/invest")
 def invest_page():
     return render_template("invest.html", active="invest")

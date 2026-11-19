@@ -8,39 +8,13 @@ Layers:
   4. Macro snapshot (rates, USD, equity benchmark)
   5. News/NLP-lite sentiment from the existing news lexicon
 
-Performance:
-  - One shared yfinance Ticker.info (+ earnings_history) per ticker, TTL-cached
-  - Macro panel cached process-wide (slow to change; longer TTL)
-  - Independent blocks run in parallel via ThreadPoolExecutor
-  - Full insight response cached briefly per (ticker, peers, macro flag)
-
 All outputs are research scenarios. Yahoo Finance fields can be missing or lag.
 """
 from __future__ import annotations
 
-import copy
 import math
-import threading
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any, Optional
-
-# ---------------------------------------------------------------------------
-# Caches (process-local, thread-safe)
-# ---------------------------------------------------------------------------
-_bundle_lock = threading.Lock()
-_bundle_cache: dict[str, tuple[float, dict]] = {}
-_BUNDLE_TTL = 300  # 5 minutes — fundamentals rarely need second-level freshness
-
-_macro_lock = threading.Lock()
-_macro_cache: tuple[float, dict] | None = None
-_MACRO_TTL = 900  # 15 minutes
-
-_insight_lock = threading.Lock()
-_insight_cache: dict[str, tuple[float, dict]] = {}
-_INSIGHT_TTL = 180  # 3 minutes — interactive re-runs feel instant
-_INSIGHT_MAX = 64
 
 
 def _n(value) -> Optional[float]:
@@ -58,52 +32,11 @@ def _pct(a, b) -> Optional[float]:
     return (a - b) / abs(b) * 100.0
 
 
-def _get_ticker_bundle(ticker: str) -> dict:
-    """Fetch Ticker.info + earnings_history once; reuse across earnings/DCF/multiples."""
-    key = (ticker or "").strip().upper()
-    now = time.time()
-    with _bundle_lock:
-        hit = _bundle_cache.get(key)
-        if hit and (now - hit[0]) < _BUNDLE_TTL:
-            return hit[1]
-
-    info: dict = {}
-    earnings_history = None
-    error = None
-    try:
-        import yfinance as yf
-        t = yf.Ticker(key)
-        # .info is the expensive call; do it once
-        info = t.info or {}
-        try:
-            earnings_history = t.earnings_history
-        except Exception:
-            earnings_history = None
-    except Exception as e:
-        error = str(e)
-
-    bundle = {
-        "ticker": key,
-        "info": info,
-        "earnings_history": earnings_history,
-        "error": error,
-        "fetched_at": now,
-    }
-    with _bundle_lock:
-        _bundle_cache[key] = (now, bundle)
-        # Soft bound so a long process scanning many names cannot grow forever
-        if len(_bundle_cache) > 256:
-            oldest = sorted(_bundle_cache.items(), key=lambda kv: kv[1][0])[:64]
-            for k, _ in oldest:
-                _bundle_cache.pop(k, None)
-    return bundle
-
-
 # ---------------------------------------------------------------------------
 # Earnings revisions & PEAD-lite
 # ---------------------------------------------------------------------------
-def _earnings_revision_block(ticker: str, bundle: Optional[dict] = None) -> dict:
-    """Best-effort PEAD / revision cues from yfinance (uses shared bundle when given)."""
+def _earnings_revision_block(ticker: str) -> dict:
+    """Best-effort PEAD / revision cues from yfinance."""
     out = {
         "available": False,
         "last_report": None,
@@ -114,30 +47,28 @@ def _earnings_revision_block(ticker: str, bundle: Optional[dict] = None) -> dict
         "pead_bias": "unknown",
         "notes": [],
     }
-    bundle = bundle or _get_ticker_bundle(ticker)
-    if bundle.get("error") and not bundle.get("info"):
-        out["notes"].append(f"Could not load earnings fields: {bundle['error']}")
+    try:
+        import yfinance as yf
+        t = yf.Ticker(ticker)
+        info = t.info or {}
+    except Exception as e:
+        out["notes"].append(f"Could not load earnings fields: {e}")
         return out
 
-    info = bundle.get("info") or {}
+    # Earnings history (actual vs estimate)
     surprise_pct = None
     try:
-        eh = bundle.get("earnings_history")
+        eh = t.earnings_history
         if eh is not None and len(eh) > 0:
             row = eh.iloc[0]
+            # columns vary by yfinance version
             for col in ("surprisePercent", "surprise_pct", "pct_diff"):
                 if col in eh.columns:
                     surprise_pct = _n(row.get(col) if hasattr(row, "get") else row[col])
                     break
             if surprise_pct is None:
-                act = None
-                est = None
-                if hasattr(row, "get"):
-                    act = _n(row.get("epsActual") or row.get("actual"))
-                    est = _n(row.get("epsEstimate") or row.get("estimate"))
-                else:
-                    act = _n(row["epsActual"]) if "epsActual" in eh.columns else None
-                    est = _n(row["epsEstimate"]) if "epsEstimate" in eh.columns else None
+                act = _n(row.get("epsActual") if hasattr(row, "get") else row.get("actual"))
+                est = _n(row.get("epsEstimate") if hasattr(row, "get") else row.get("estimate"))
                 if act is not None and est not in (None, 0):
                     surprise_pct = (act - est) / abs(est) * 100.0
             out["last_report"] = {
@@ -151,6 +82,7 @@ def _earnings_revision_block(ticker: str, bundle: Optional[dict] = None) -> dict
     except Exception:
         pass
 
+    # Analyst EPS trend (current vs 30/60/90d ago) when present
     growth = _n(info.get("earningsGrowth") or info.get("earningsQuarterlyGrowth"))
     rev_growth = _n(info.get("revenueGrowth"))
     target_mean = _n(info.get("targetMeanPrice"))
@@ -165,6 +97,7 @@ def _earnings_revision_block(ticker: str, bundle: Optional[dict] = None) -> dict
     }
     out["eps_trend"] = trend
 
+    # Heuristic revision / PEAD bias (transparent, not a model)
     score = 0
     if surprise_pct is not None:
         if surprise_pct >= 5:
@@ -210,17 +143,17 @@ def _earnings_revision_block(ticker: str, bundle: Optional[dict] = None) -> dict
 # ---------------------------------------------------------------------------
 # Relative multiples
 # ---------------------------------------------------------------------------
-def _relative_multiples(
-    ticker: str,
-    peer_tickers: Optional[list] = None,
-    bundle: Optional[dict] = None,
-) -> dict:
+def _relative_multiples(ticker: str, peer_tickers: Optional[list] = None) -> dict:
+    from . import valuation as val_mod
+
     peers = peer_tickers or []
     if not peers:
-        bundle = bundle or _get_ticker_bundle(ticker)
-        info = bundle.get("info") or {}
-        if bundle.get("error") and not info:
-            return {"available": False, "error": bundle["error"], "company": {}, "peers": []}
+        # Soft default: empty peers → company-only snapshot
+        try:
+            import yfinance as yf
+            info = yf.Ticker(ticker).info or {}
+        except Exception as e:
+            return {"available": False, "error": str(e), "company": {}, "peers": []}
 
         company = {
             "ticker": ticker.upper(),
@@ -248,7 +181,6 @@ def _relative_multiples(
         }
 
     try:
-        from . import valuation as val_mod
         result = val_mod.fetch_relative_valuation(ticker, peers)
         return {
             "available": True,
@@ -272,15 +204,14 @@ def simple_dcf(
     terminal_growth: float = 0.025,
     wacc: Optional[float] = None,
     net_debt: Optional[float] = None,
-    bundle: Optional[dict] = None,
 ) -> dict:
     """Two-stage FCF DCF with explicit assumptions and a sensitivity band."""
     notes = []
-    if bundle is None:
-        bundle = _get_ticker_bundle(ticker)
-    info = bundle.get("info") or {}
-    if bundle.get("error") and not info:
-        return {"available": False, "error": bundle["error"], "notes": [bundle["error"]]}
+    try:
+        import yfinance as yf
+        info = yf.Ticker(ticker).info or {}
+    except Exception as e:
+        return {"available": False, "error": str(e), "notes": [str(e)]}
 
     fcf = _n(fcf) or _n(info.get("freeCashflow"))
     shares = _n(shares) or _n(info.get("sharesOutstanding"))
@@ -292,10 +223,12 @@ def simple_dcf(
 
     if growth_rate is None:
         growth_rate = _n(info.get("earningsGrowth")) or _n(info.get("revenueGrowth")) or 0.06
+        # Clamp absurd growth prints
         growth_rate = max(-0.05, min(0.25, growth_rate))
         notes.append(f"Growth defaulted from provider fields / 6% floor-cap → {growth_rate:.1%}.")
     if wacc is None:
         beta = _n(info.get("beta")) or 1.0
+        # Rough CAPM-ish WACC: rf 4% + beta * 5% ERP, debt ignored for simplicity
         wacc = 0.04 + beta * 0.05
         wacc = max(0.06, min(0.14, wacc))
         notes.append(f"WACC approximated from beta ({beta:.2f}) → {wacc:.1%} (not company-specific CoD).")
@@ -329,11 +262,7 @@ def simple_dcf(
 
     base = _value(growth_rate, wacc, terminal_growth)
     low = _value(max(-0.02, growth_rate - 0.03), wacc + 0.015, max(0.0, terminal_growth - 0.005))
-    high = _value(
-        min(0.28, growth_rate + 0.03),
-        max(0.055, wacc - 0.01),
-        min(wacc - 0.005, terminal_growth + 0.005),
-    )
+    high = _value(min(0.28, growth_rate + 0.03), max(0.055, wacc - 0.01), min(wacc - 0.005, terminal_growth + 0.005))
 
     upside = _pct(base, price) if price else None
     return {
@@ -362,18 +291,12 @@ def simple_dcf(
 
 
 # ---------------------------------------------------------------------------
-# Macro snapshot (shared cache — same for every ticker)
+# Macro snapshot
 # ---------------------------------------------------------------------------
 def macro_snapshot() -> dict:
-    """Lightweight macro panel via public Yahoo symbols (TTL-cached)."""
-    global _macro_cache
-    now = time.time()
-    with _macro_lock:
-        if _macro_cache and (now - _macro_cache[0]) < _MACRO_TTL:
-            return copy.deepcopy(_macro_cache[1])
-
+    """Lightweight macro panel via public Yahoo symbols."""
     symbols = {
-        "us_10y": "^TNX",
+        "us_10y": "^TNX",       # 10Y yield *10 on Yahoo historically; treat carefully
         "us_equity": "SPY",
         "usd": "DX-Y.NYB",
         "gold": "GC=F",
@@ -383,10 +306,9 @@ def macro_snapshot() -> dict:
     notes = []
     try:
         import yfinance as yf
-        # 3mo is enough for 1m/3m changes and is faster than 6mo
         data = yf.download(
             list(symbols.values()),
-            period="3mo",
+            period="6mo",
             interval="1d",
             group_by="ticker",
             auto_adjust=True,
@@ -394,24 +316,21 @@ def macro_snapshot() -> dict:
             threads=True,
         )
     except Exception as e:
-        result = {"available": False, "rows": {}, "notes": [str(e)]}
-        with _macro_lock:
-            _macro_cache = (now, result)
-        return copy.deepcopy(result)
+        return {"available": False, "rows": {}, "notes": [str(e)]}
 
     for name, sym in symbols.items():
         try:
-            close = None
-            if hasattr(data.columns, "levels"):
-                try:
-                    close = data[sym]["Close"].dropna()
-                except Exception:
-                    try:
-                        close = data["Close"][sym].dropna()
-                    except Exception:
-                        close = None
+            if len(symbols) == 1:
+                close = data["Close"].dropna()
             else:
-                close = data["Close"].dropna() if "Close" in data else None
+                # Multi-index columns
+                if hasattr(data.columns, "levels"):
+                    close = data[sym]["Close"].dropna() if sym in data.columns.get_level_values(0) else None
+                    if close is None:
+                        # alternate orientation
+                        close = data["Close"][sym].dropna() if "Close" in data and sym in data["Close"] else None
+                else:
+                    close = data["Close"].dropna()
             if close is None or len(close) < 25:
                 continue
             last = float(close.iloc[-1])
@@ -430,28 +349,25 @@ def macro_snapshot() -> dict:
 
     if not rows:
         notes.append("Macro series unavailable from provider right now.")
-        result = {"available": False, "rows": {}, "notes": notes}
-    else:
-        tags = []
-        eq = rows.get("us_equity")
-        if eq and eq.get("chg_1m_pct") is not None:
-            tags.append("equity_risk_on" if eq["chg_1m_pct"] > 0 else "equity_soft")
-        yld = rows.get("us_10y")
-        if yld and yld.get("chg_1m_pct") is not None:
-            tags.append("yields_up" if yld["chg_1m_pct"] > 0 else "yields_down")
-        notes.append(
-            "Macro panel is a desk snapshot (SPY, USD, 10Y proxy, commodities) — "
-            "not a full sector-rotation model."
-        )
-        result = {"available": True, "rows": rows, "tags": tags, "notes": notes}
+        return {"available": False, "rows": {}, "notes": notes}
 
-    with _macro_lock:
-        _macro_cache = (now, result)
-    return copy.deepcopy(result)
+    # Simple regime tags
+    tags = []
+    eq = rows.get("us_equity")
+    if eq and eq.get("chg_1m_pct") is not None:
+        tags.append("equity_risk_on" if eq["chg_1m_pct"] > 0 else "equity_soft")
+    yld = rows.get("us_10y")
+    if yld and yld.get("chg_1m_pct") is not None:
+        tags.append("yields_up" if yld["chg_1m_pct"] > 0 else "yields_down")
+    notes.append(
+        "Macro panel is a desk snapshot (SPY, USD, 10Y proxy, commodities) — "
+        "not a full sector-rotation model."
+    )
+    return {"available": True, "rows": rows, "tags": tags, "notes": notes}
 
 
 # ---------------------------------------------------------------------------
-# Sentiment (reuses news lexicon)
+# Sentiment (reuses news lexicon; FinBERT optional later)
 # ---------------------------------------------------------------------------
 def sentiment_block(ticker: str) -> dict:
     try:
@@ -479,13 +395,8 @@ def sentiment_block(ticker: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Orchestrator (parallel + result cache)
+# Orchestrator
 # ---------------------------------------------------------------------------
-def _insight_key(ticker: str, peers: list, include_macro: bool) -> str:
-    peer_part = ",".join(sorted(peers))
-    return f"{ticker}|{peer_part}|{int(bool(include_macro))}"
-
-
 def build_fundamental_insight(
     ticker: str,
     peer_tickers: Optional[list] = None,
@@ -501,46 +412,13 @@ def build_fundamental_insight(
         if s and s != ticker and s not in peers:
             peers.append(s)
 
-    cache_key = _insight_key(ticker, peers, include_macro)
-    now = time.time()
-    with _insight_lock:
-        hit = _insight_cache.get(cache_key)
-        if hit and (now - hit[0]) < _INSIGHT_TTL:
-            return copy.deepcopy(hit[1])
+    earnings = _earnings_revision_block(ticker)
+    relative = _relative_multiples(ticker, peers)
+    dcf = simple_dcf(ticker)
+    sentiment = sentiment_block(ticker)
+    macro = macro_snapshot() if include_macro else {"available": False, "rows": {}, "notes": []}
 
-    # Shared fundamentals payload — one network round-trip for info
-    bundle = _get_ticker_bundle(ticker)
-
-    earnings = dcf = relative = sentiment = None
-    macro = {"available": False, "rows": {}, "notes": []}
-
-    # Parallelize independent I/O: relative (peers), sentiment (news), macro
-    # Earnings + DCF are pure CPU on the shared bundle (fast) — run inline.
-    earnings = _earnings_revision_block(ticker, bundle=bundle)
-    dcf = simple_dcf(ticker, bundle=bundle)
-
-    futures = {}
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        futures[pool.submit(_relative_multiples, ticker, peers, bundle if not peers else None)] = "relative"
-        futures[pool.submit(sentiment_block, ticker)] = "sentiment"
-        if include_macro:
-            futures[pool.submit(macro_snapshot)] = "macro"
-
-        relative = {"available": False, "notes": ["relative multiples failed"]}
-        sentiment = {"available": False, "summary": None, "headlines": [], "notes": []}
-        for fut in as_completed(futures):
-            label = futures[fut]
-            try:
-                val = fut.result()
-            except Exception as e:
-                val = {"available": False, "notes": [str(e)]}
-            if label == "relative":
-                relative = val
-            elif label == "sentiment":
-                sentiment = val
-            elif label == "macro":
-                macro = val
-
+    # Composite research stance (transparent weights, not a rating agency score)
     score = 0.0
     weights_used = []
     if earnings.get("revision_label") == "constructive":
@@ -572,7 +450,7 @@ def build_fundamental_insight(
     else:
         stance = "mixed / needs judgment"
 
-    result = {
+    return {
         "ticker": ticker,
         "retrieved_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         "stance": stance,
@@ -586,30 +464,376 @@ def build_fundamental_insight(
             "Research synthesis only — not a recommendation to buy or sell. "
             "DCF and PEAD heuristics are simplified; provider data may be incomplete."
         ),
-        "perf": {
-            "bundle_cached": (time.time() - bundle.get("fetched_at", now)) > 0.05
-            and (now - bundle.get("fetched_at", now)) < _BUNDLE_TTL,
-            "insight_cache_ttl_sec": _INSIGHT_TTL,
-            "macro_cache_ttl_sec": _MACRO_TTL if include_macro else 0,
-        },
     }
 
-    with _insight_lock:
-        _insight_cache[cache_key] = (time.time(), result)
-        if len(_insight_cache) > _INSIGHT_MAX:
-            oldest = sorted(_insight_cache.items(), key=lambda kv: kv[1][0])[:16]
-            for k, _ in oldest:
-                _insight_cache.pop(k, None)
 
-    return copy.deepcopy(result)
+# ---------------------------------------------------------------------------
+# Full Wall Street Breakdown (equity-analyst style research note)
+# ---------------------------------------------------------------------------
+def _fmt_money(n: Optional[float]) -> str:
+    if n is None:
+        return "n/a"
+    n = float(n)
+    for unit, div in (("T", 1e12), ("B", 1e9), ("M", 1e6), ("K", 1e3)):
+        if abs(n) >= div:
+            return f"{n / div:.2f}{unit}"
+    return f"{n:.0f}"
 
 
-def clear_caches() -> None:
-    """Test helper / manual flush."""
-    global _macro_cache
-    with _bundle_lock:
-        _bundle_cache.clear()
-    with _macro_lock:
-        _macro_cache = None
-    with _insight_lock:
-        _insight_cache.clear()
+def _fmt_pct_val(n: Optional[float], already_ratio: bool = True) -> str:
+    if n is None:
+        return "n/a"
+    v = float(n) * 100 if already_ratio else float(n)
+    return f"{v:.1f}%"
+
+
+def _safe_info(ticker: str) -> dict:
+    try:
+        import yfinance as yf
+        return yf.Ticker(ticker).info or {}
+    except Exception:
+        return {}
+
+
+def _latest_earnings_snapshot(ticker: str) -> dict:
+    """Pull the most recent earnings surprise / date when yfinance has it."""
+    out = {
+        "available": False,
+        "period": None,
+        "surprise_pct": None,
+        "beat": None,
+        "next_date": None,
+        "days_until": None,
+        "notes": [],
+    }
+    try:
+        import yfinance as yf
+        t = yf.Ticker(ticker)
+        eh = getattr(t, "earnings_history", None)
+        if eh is not None and len(eh) > 0:
+            row = eh.iloc[0]
+            surprise = None
+            for col in ("surprisePercent", "surprise_pct", "pct_diff"):
+                if col in eh.columns:
+                    surprise = _n(row.get(col) if hasattr(row, "get") else row[col])
+                    break
+            if surprise is None:
+                act = _n(row.get("epsActual") if hasattr(row, "get") else row.get("actual"))
+                est = _n(row.get("epsEstimate") if hasattr(row, "get") else row.get("estimate"))
+                if act is not None and est not in (None, 0):
+                    surprise = (act - est) / abs(est) * 100.0
+            out["period"] = str(row.name) if hasattr(row, "name") else None
+            out["surprise_pct"] = None if surprise is None else round(surprise, 2)
+            out["beat"] = surprise > 0 if surprise is not None else None
+            out["available"] = True
+        # Next earnings
+        try:
+            from . import fundamentals as fund_mod
+            nxt = fund_mod.get_next_earnings_info(ticker)
+            if nxt and nxt.get("date"):
+                out["next_date"] = str(nxt["date"])
+                out["days_until"] = nxt.get("days_until")
+        except Exception:
+            pass
+    except Exception as e:
+        out["notes"].append(f"Earnings snapshot limited: {e}")
+    return out
+
+
+def build_wall_street_breakdown(ticker: str) -> dict:
+    """
+    Structured equity-analyst style note for one ticker.
+
+    Sections (aligned with a classic Wall Street initiation / update memo):
+      1. Business model & positioning
+      2. Revenue drivers & growth
+      3. Margins & profitability
+      4. Cash flow & balance-sheet health
+      5. Competitive position
+      6. Recent earnings
+      7. Catalysts
+      8. Biggest risks
+      9. Key numbers to monitor
+
+    Data is grounded in Yahoo Finance (info, earnings history, targets) plus
+    existing Kronos news/sentiment helpers. Missing fields are called out
+    explicitly — never invented.
+    """
+    ticker = (ticker or "").strip().upper()
+    if not ticker:
+        raise ValueError("ticker is required")
+
+    from . import fundamentals as fund_mod
+    from . import news as news_mod
+
+    try:
+        fund = fund_mod.get_fundamentals(ticker)
+    except Exception as e:
+        raise ValueError(f"Could not load fundamentals for {ticker}: {e}") from e
+
+    try:
+        analyst = fund_mod.get_analyst_targets(ticker)
+    except Exception:
+        analyst = {}
+
+    info = _safe_info(ticker)
+    earnings = _latest_earnings_snapshot(ticker)
+
+    try:
+        _items, news_summary = news_mod.get_news(ticker)
+    except Exception:
+        news_summary = {"label": "unavailable", "score": None, "headline_count": 0}
+
+    # --- Structured sections (data only) ---
+    business = {
+        "name": fund.get("name") or ticker,
+        "sector": fund.get("sector"),
+        "industry": fund.get("industry"),
+        "description": (fund.get("description") or info.get("longBusinessSummary") or "")[:1200] or None,
+        "employees": fund.get("employees") or info.get("fullTimeEmployees"),
+        "country": fund.get("country") or info.get("country"),
+        "website": fund.get("website") or info.get("website"),
+        "exchange": fund.get("exchange"),
+    }
+
+    growth = {
+        "revenue_growth": fund.get("revenue_growth"),
+        "earnings_growth": fund.get("earnings_growth"),
+        "market_cap": fund.get("market_cap"),
+        "trailing_pe": fund.get("pe_ratio"),
+        "forward_pe": fund.get("forward_pe"),
+        "peg": fund.get("peg_ratio"),
+        "eps": fund.get("eps"),
+        "forward_eps": fund.get("forward_eps"),
+    }
+
+    margins = {
+        "profit_margin": fund.get("profit_margin"),
+        "operating_margin": fund.get("operating_margin"),
+        "roe": fund.get("roe"),
+        "roa": fund.get("roa"),
+    }
+
+    cash = {
+        "free_cashflow": fund.get("free_cashflow"),
+        "debt_to_equity": fund.get("debt_to_equity"),
+        "current_ratio": fund.get("current_ratio"),
+        "dividend_yield": fund.get("dividend_yield"),
+    }
+
+    competitive = {
+        "sector": business["sector"],
+        "industry": business["industry"],
+        "beta": fund.get("beta"),
+        "fifty_two_week_low": fund.get("fifty_two_week_low"),
+        "fifty_two_week_high": fund.get("fifty_two_week_high"),
+        "current_price": fund.get("current_price"),
+    }
+
+    catalysts = []
+    if earnings.get("next_date"):
+        days = earnings.get("days_until")
+        catalysts.append(
+            f"Next earnings: {earnings['next_date']}"
+            + (f" ({days}d)" if days is not None else "")
+        )
+    if analyst.get("target_mean") and fund.get("current_price"):
+        upside = (analyst["target_mean"] - fund["current_price"]) / fund["current_price"] * 100
+        catalysts.append(
+            f"Analyst mean target {_fmt_money(analyst['target_mean'])} "
+            f"({upside:+.1f}% vs last)"
+        )
+    if news_summary and news_summary.get("label") not in (None, "unavailable"):
+        catalysts.append(f"Recent headline tone: {news_summary.get('label')}")
+
+    risks = []
+    if fund.get("debt_to_equity") is not None and float(fund["debt_to_equity"]) > 150:
+        risks.append("Elevated debt-to-equity (>150) — leverage / refinancing sensitivity.")
+    if fund.get("profit_margin") is not None and float(fund["profit_margin"]) < 0:
+        risks.append("Negative profit margin — profitability not yet established or under pressure.")
+    if fund.get("beta") is not None and float(fund["beta"]) > 1.4:
+        risks.append(f"High beta ({float(fund['beta']):.2f}) — larger swings vs the market.")
+    if earnings.get("days_until") is not None and 0 <= earnings["days_until"] <= 14:
+        risks.append("Earnings within ~2 weeks — event risk and wider path uncertainty.")
+    if not risks:
+        risks.append("Standard equity risks: multiple compression, competition, macro, and company-specific execution.")
+
+    monitor = [
+        "Next earnings date and EPS / revenue surprise vs consensus",
+        "Revenue growth and operating margin trend (QoQ / YoY)",
+        "Free cash flow and debt-to-equity path",
+        "Forward P/E vs own history and closest peers",
+        "Analyst target / recommendation revisions",
+        "Any material guidance change or segment mix shift",
+    ]
+
+    # --- Narrative (rule-based; optional LLM polish happens upstream if used) ---
+    lines = []
+    lines.append(f"## Wall Street-style breakdown — {business['name']} ({ticker})")
+    lines.append("")
+    lines.append(
+        "_Research synthesis only. Not a recommendation to buy or sell. "
+        "Provider data can be incomplete or lagged._"
+    )
+    lines.append("")
+
+    # 1 Business model
+    lines.append("### 1. Business model & positioning")
+    if business["description"]:
+        lines.append(business["description"])
+    else:
+        lines.append("No long business summary returned by the data provider for this ticker.")
+    bits = []
+    if business["sector"]:
+        bits.append(f"Sector: **{business['sector']}**")
+    if business["industry"]:
+        bits.append(f"Industry: **{business['industry']}**")
+    if business["employees"]:
+        bits.append(f"Employees: ~{int(business['employees']):,}")
+    if business["country"]:
+        bits.append(f"HQ country: {business['country']}")
+    if bits:
+        lines.append("")
+        lines.append(" · ".join(bits))
+    lines.append("")
+
+    # 2 Growth
+    lines.append("### 2. Revenue drivers & growth")
+    pe_s = f"{growth['trailing_pe']:.1f}" if growth.get("trailing_pe") is not None else "n/a"
+    lines.append(f"- Market cap: **{_fmt_money(growth['market_cap'])}** | Trailing P/E: **{pe_s}**")
+    if growth.get("forward_pe") is not None:
+        peg_bit = f" | PEG: **{growth['peg']:.2f}**" if growth.get("peg") is not None else ""
+        lines.append(f"- Forward P/E: **{growth['forward_pe']:.1f}**{peg_bit}")
+    lines.append(
+        f"- Revenue growth (YoY, provider): **{_fmt_pct_val(growth['revenue_growth'])}** | "
+        f"Earnings growth: **{_fmt_pct_val(growth['earnings_growth'])}**"
+    )
+    if growth.get("eps") or growth.get("forward_eps"):
+        lines.append(
+            f"- EPS trailing / forward: "
+            f"**{growth['eps'] if growth.get('eps') is not None else 'n/a'}** / "
+            f"**{growth['forward_eps'] if growth.get('forward_eps') is not None else 'n/a'}**"
+        )
+    lines.append(
+        "_Revenue-driver detail (segment mix, pricing, volume) is not fully available "
+        "from the free data feed — use the company 10-K / latest earnings deck for the real driver tree._"
+    )
+    lines.append("")
+
+    # 3 Margins
+    lines.append("### 3. Margins & profitability")
+    lines.append(
+        f"- Operating margin: **{_fmt_pct_val(margins['operating_margin'])}** | "
+        f"Profit margin: **{_fmt_pct_val(margins['profit_margin'])}**"
+    )
+    lines.append(
+        f"- ROE: **{_fmt_pct_val(margins['roe'])}** | ROA: **{_fmt_pct_val(margins['roa'])}**"
+    )
+    lines.append("")
+
+    # 4 Cash flow
+    lines.append("### 4. Cash flow & balance sheet")
+    lines.append(
+        f"- Free cash flow (TTM, provider): **{_fmt_money(cash['free_cashflow'])}**"
+    )
+    de = cash.get("debt_to_equity")
+    de_s = "n/a" if de is None else f"{float(de):.1f}"
+    cr = cash.get("current_ratio")
+    cr_s = "n/a" if cr is None else f"{float(cr):.2f}"
+    lines.append(f"- Debt / equity: **{de_s}** | Current ratio: **{cr_s}**")
+    if cash.get("dividend_yield"):
+        lines.append(f"- Dividend yield: **{_fmt_pct_val(cash['dividend_yield'])}**")
+    lines.append("")
+
+    # 5 Competitive
+    lines.append("### 5. Competitive position")
+    lines.append(
+        f"- Industry context: **{competitive.get('industry') or 'n/a'}** "
+        f"(sector {competitive.get('sector') or 'n/a'})"
+    )
+    if competitive.get("beta") is not None:
+        lines.append(f"- Beta: **{float(competitive['beta']):.2f}** (sensitivity vs market)")
+    if competitive.get("fifty_two_week_low") and competitive.get("fifty_two_week_high"):
+        lines.append(
+            f"- 52-week range: **{competitive['fifty_two_week_low']:.2f} – "
+            f"{competitive['fifty_two_week_high']:.2f}** "
+            f"(last ~{competitive.get('current_price') or 'n/a'})"
+        )
+    lines.append(
+        "_Moat quality (switching costs, network effects, cost advantage) requires qualitative "
+        "judgment from filings and competitive landscape — not inferred from multiples alone._"
+    )
+    lines.append("")
+
+    # 6 Recent earnings
+    lines.append("### 6. Recent earnings")
+    if earnings.get("available"):
+        beat = earnings.get("beat")
+        surprise = earnings.get("surprise_pct")
+        lines.append(
+            f"- Last reported period: **{earnings.get('period') or 'n/a'}** | "
+            f"EPS surprise: **{f'{surprise:+.1f}%' if surprise is not None else 'n/a'}**"
+            + (" (beat)" if beat is True else " (miss)" if beat is False else "")
+        )
+    else:
+        lines.append("- Latest EPS surprise not available from the provider for this ticker.")
+    if earnings.get("next_date"):
+        lines.append(
+            f"- Next report: **{earnings['next_date']}**"
+            + (f" ({earnings['days_until']} days)" if earnings.get("days_until") is not None else "")
+        )
+    lines.append("")
+
+    # 7 Catalysts
+    lines.append("### 7. Catalysts")
+    if catalysts:
+        for c in catalysts:
+            lines.append(f"- {c}")
+    else:
+        lines.append("- No near-term catalyst flagged from earnings date / targets / headlines.")
+    if analyst.get("recommendation"):
+        lines.append(
+            f"- Street consensus: **{str(analyst['recommendation']).replace('_', ' ').title()}** "
+            f"({analyst.get('num_analysts') or '?'} analysts)"
+        )
+    lines.append("")
+
+    # 8 Risks
+    lines.append("### 8. Biggest risks")
+    for r in risks:
+        lines.append(f"- {r}")
+    lines.append("")
+
+    # 9 Monitorables
+    lines.append("### 9. Key numbers an investor should monitor")
+    for m in monitor:
+        lines.append(f"- {m}")
+    lines.append("")
+    lines.append(
+        f"_Data retrieved {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}. "
+        "Prefer the company’s latest 10-Q/10-K and earnings release for the definitive view._"
+    )
+
+    text = "\n".join(lines)
+
+    return {
+        "ticker": ticker,
+        "retrieved_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+        "business": business,
+        "growth": growth,
+        "margins": margins,
+        "cash": cash,
+        "competitive": competitive,
+        "earnings": earnings,
+        "analyst": analyst,
+        "news_summary": news_summary,
+        "catalysts": catalysts,
+        "risks": risks,
+        "monitor": monitor,
+        "text": text,
+        "disclaimer": (
+            "Research synthesis only — not a recommendation to buy or sell. "
+            "Grounded in provider data (Yahoo Finance) which can lag or be incomplete; "
+            "always cross-check the latest company filing."
+        ),
+    }
