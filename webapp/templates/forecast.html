@@ -85,62 +85,129 @@
 </div>
 
 {% if result_text %}
-<div class="result-section" id="resultSection">
-  <div class="result-header">
-    <h2>Outlook</h2>
-    <span class="result-tag" id="resultTag">{{ result_ticker }}</span>
+<div class="result-section fc-panel" id="resultSection">
+  <div class="fc-identity" id="fcIdentity">
+    <div class="fc-id-left">
+      <div class="fc-ticker-row">
+        <span class="fc-ticker" id="fcTicker">{{ result_ticker }}</span>
+        <span class="fc-sector" id="fcSector" hidden></span>
+      </div>
+      <div class="fc-name" id="fcName"></div>
+    </div>
+    <div class="fc-id-right">
+      <span class="fc-horizon" id="fcHorizon">Forecast</span>
+    </div>
   </div>
   <div class="context-badges" id="contextBadges" style="display:none;"></div>
   <div class="earnings-gate-banner" id="earningsGate" style="display:none;" role="alert"></div>
-  <div class="outlook-kpis" id="outlookKpis" style="display:none;"></div>
-  <p class="outlook-legend" id="outlookLegend" style="display:none;"></p>
+  <div class="fc-kpis" id="outlookKpis">
+    <div class="fc-kpi fc-kpi-high">
+      <span class="fc-kpi-label">Range high</span>
+      <span class="fc-kpi-value" id="kpiHigh">—</span>
+    </div>
+    <div class="fc-kpi fc-kpi-centre">
+      <span class="fc-kpi-label">Centre</span>
+      <span class="fc-kpi-value" id="kpiCentre">—</span>
+    </div>
+    <div class="fc-kpi fc-kpi-low">
+      <span class="fc-kpi-label">Range low</span>
+      <span class="fc-kpi-value" id="kpiLow">—</span>
+    </div>
+    <div class="fc-kpi fc-kpi-analyst">
+      <span class="fc-kpi-label">Analyst target</span>
+      <span class="fc-kpi-value" id="kpiAnalyst">—</span>
+    </div>
+  </div>
   {% if image_url %}
-  <div class="chart-frame" id="chartFrame"><img src="{{ image_url }}" alt="Forecast chart for {{ result_ticker }}"></div>
+  <div class="fc-chart-wrap">
+    <div class="fc-chart-head">
+      <span class="fc-chart-title" id="fcChartTitle">{{ result_ticker }} — Kronos outlook</span>
+      <span class="fc-chart-badge" id="fcChartBadge">Forecast</span>
+    </div>
+    <div class="chart-frame fc-chart-frame" id="chartFrame"><img src="{{ image_url }}" alt="Forecast chart for {{ result_ticker }}"></div>
+  </div>
+  {% else %}
+  <div class="fc-chart-wrap" id="fcChartWrap" hidden>
+    <div class="fc-chart-head">
+      <span class="fc-chart-title" id="fcChartTitle">Kronos outlook</span>
+      <span class="fc-chart-badge" id="fcChartBadge">Forecast</span>
+    </div>
+    <div class="chart-frame fc-chart-frame" id="chartFrame"></div>
+  </div>
   {% endif %}
-  <div class="result-text" id="resultText">{{ result_text }}</div>
+  <div class="fc-bottom">
+    <section class="fc-card fc-insights">
+      <h3 class="fc-card-title">Key insights</h3>
+      <ul class="fc-insight-list" id="fcInsights">
+        <li class="fc-insight"><span class="fc-insight-label">Outlook</span><span class="fc-insight-text" id="resultText">{{ result_text }}</span></li>
+      </ul>
+    </section>
+    <section class="fc-card fc-explain">
+      <h3 class="fc-card-title">Explanation</h3>
+      <div class="fc-explain-body" id="fcExplanation">{{ result_text }}</div>
+      <p class="fc-explain-note">Based on historical prices and available context signals. Research only — not financial advice.</p>
+    </section>
+  </div>
 </div>
 {% else %}
-<div class="result-section" id="resultSection" style="display:none;">
-  <div class="result-header">
-    <h2>Outlook</h2>
-    <span class="result-tag" id="resultTag"></span>
+<div class="result-section fc-panel" id="resultSection" style="display:none;">
+  <div class="fc-identity" id="fcIdentity">
+    <div class="fc-id-left">
+      <div class="fc-ticker-row">
+        <span class="fc-ticker" id="fcTicker"></span>
+        <span class="fc-sector" id="fcSector" hidden></span>
+      </div>
+      <div class="fc-name" id="fcName"></div>
+    </div>
+    <div class="fc-id-right">
+      <span class="fc-horizon" id="fcHorizon">Forecast</span>
+    </div>
   </div>
   <div class="context-badges" id="contextBadges" style="display:none;"></div>
   <div class="earnings-gate-banner" id="earningsGate" style="display:none;" role="alert"></div>
-
-  <!-- Range KPI strip (inspired by professional outlook panels) -->
-  <div class="outlook-kpis" id="outlookKpis" style="display:none;">
-    <div class="outlook-kpi">
-      <span class="outlook-kpi-label">Range high</span>
-      <span class="outlook-kpi-value high" id="kpiHigh">—</span>
+  <div class="fc-kpis" id="outlookKpis" style="display:none;">
+    <div class="fc-kpi fc-kpi-high">
+      <span class="fc-kpi-label">Range high</span>
+      <span class="fc-kpi-value" id="kpiHigh">—</span>
     </div>
-    <div class="outlook-kpi">
-      <span class="outlook-kpi-label">Centre</span>
-      <span class="outlook-kpi-value centre" id="kpiCentre">—</span>
+    <div class="fc-kpi fc-kpi-centre">
+      <span class="fc-kpi-label">Centre</span>
+      <span class="fc-kpi-value" id="kpiCentre">—</span>
     </div>
-    <div class="outlook-kpi">
-      <span class="outlook-kpi-label">Range low</span>
-      <span class="outlook-kpi-value low" id="kpiLow">—</span>
+    <div class="fc-kpi fc-kpi-low">
+      <span class="fc-kpi-label">Range low</span>
+      <span class="fc-kpi-value" id="kpiLow">—</span>
     </div>
-    <div class="outlook-kpi">
-      <span class="outlook-kpi-label">Analyst target</span>
-      <span class="outlook-kpi-value analyst" id="kpiAnalyst">—</span>
+    <div class="fc-kpi fc-kpi-analyst">
+      <span class="fc-kpi-label">Analyst target</span>
+      <span class="fc-kpi-value" id="kpiAnalyst">—</span>
     </div>
   </div>
-  <p class="outlook-legend" id="outlookLegend" style="display:none;">
-    <span class="leg-high">● Range high</span>
-    <span class="leg-centre">● Centre</span>
-    <span class="leg-low">● Range low</span>
-    <span class="leg-analyst">◆ Analyst consensus</span>
-    · Information &amp; education only · Not financial advice
-  </p>
-
-  <div class="chart-frame" id="chartFrame" style="display:none;"></div>
-  <div class="result-text" id="resultText"></div>
+  <div class="fc-chart-wrap" id="fcChartWrap" style="display:none;">
+    <div class="fc-chart-head">
+      <span class="fc-chart-title" id="fcChartTitle">Kronos outlook</span>
+      <span class="fc-chart-badge" id="fcChartBadge">Forecast</span>
+    </div>
+    <div class="chart-frame fc-chart-frame" id="chartFrame"></div>
+  </div>
+  <div class="fc-bottom">
+    <section class="fc-card fc-insights">
+      <h3 class="fc-card-title">Key insights</h3>
+      <ul class="fc-insight-list" id="fcInsights"></ul>
+    </section>
+    <section class="fc-card fc-explain">
+      <h3 class="fc-card-title">Explanation</h3>
+      <div class="fc-explain-body" id="fcExplanation"></div>
+      <p class="fc-explain-note">Based on historical prices and available context signals. Research only — not financial advice.</p>
+    </section>
+  </div>
+  <!-- legacy hooks kept for JS compatibility -->
+  <div class="result-text" id="resultText" hidden></div>
+  <p class="outlook-legend" id="outlookLegend" hidden></p>
 </div>
 {% endif %}
-
 {% endblock %}
+
 {% block scripts %}
 <script src="{{ url_for('static', filename='js/forecast.js') }}"></script>
 <script>
