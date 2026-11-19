@@ -179,6 +179,7 @@ def _run_forecast_ticker_job(job_id, ticker, pred_len, lookback, detailed):
         ctx_dict = None
         analyst = None
         analyst_target = None
+        fund_data = None
         try:
             from assistant.context_signal import (
                 build_context_signal, widen_forecast_bands, format_context_block,
@@ -255,9 +256,105 @@ def _run_forecast_ticker_job(job_id, ticker, pred_len, lookback, detailed):
         if detailed or fc.get("n_runs", 1) > 1:
             result_text += f" ({fc.get('n_runs', 1)} sampled paths.)"
         result_text += context_block
+
+        # Identity for the result panel
+        company_name = sector = None
+        try:
+            if fund_data and isinstance(fund_data, dict):
+                company_name = fund_data.get("longName") or fund_data.get("shortName") or fund_data.get("name")
+                sector = fund_data.get("sector")
+        except Exception:
+            pass
+        if not company_name or not sector:
+            try:
+                import yfinance as yf
+                info = yf.Ticker(ticker).info or {}
+                company_name = company_name or info.get("longName") or info.get("shortName")
+                sector = sector or info.get("sector")
+            except Exception:
+                pass
+
+        # Structured insights for the result layout
+        insights = []
+        if range_high is not None and range_low is not None and last_close:
+            mid = range_centre if range_centre is not None else (range_high + range_low) / 2
+            move = (mid - last_close) / last_close * 100
+            if move >= 1.5:
+                trend_txt = (
+                    f"Model centre path is about {move:+.1f}% from the last close over the next "
+                    f"{pred_len} sessions (band {range_low:.2f}–{range_high:.2f})."
+                )
+            elif move <= -1.5:
+                trend_txt = (
+                    f"Model centre path is about {move:+.1f}% from the last close over the next "
+                    f"{pred_len} sessions (band {range_low:.2f}–{range_high:.2f})."
+                )
+            else:
+                trend_txt = (
+                    f"Centre path is roughly flat vs last close ({move:+.1f}%) with a projected "
+                    f"band of {range_low:.2f}–{range_high:.2f} over {pred_len} sessions."
+                )
+            insights.append({"key": "trend", "label": "Trend", "text": trend_txt})
+        if analyst_target and last_close:
+            upside = (analyst_target - last_close) / last_close * 100
+            insights.append({
+                "key": "analyst",
+                "label": "Analyst view",
+                "text": (
+                    f"Consensus mean target near {analyst_target:.2f} "
+                    f"({upside:+.1f}% vs last close). Long-horizon view may differ from the near-term path."
+                ),
+            })
+        risk_bits = []
+        if ctx_dict:
+            if ctx_dict.get("earnings_gate"):
+                risk_bits.append("earnings window is near — treat the path as a pre-event scenario")
+            if (ctx_dict.get("event_risk") or "").lower() in ("elevated", "high"):
+                risk_bits.append("context flags elevated event risk")
+            if ctx_dict.get("band_widen_factor") and ctx_dict.get("band_widen_factor", 1) > 1:
+                risk_bits.append(f"uncertainty band widened (×{ctx_dict['band_widen_factor']})")
+        if range_high is not None and range_low is not None and range_centre:
+            width = (range_high - range_low) / range_centre * 100
+            if width >= 8:
+                risk_bits.append(f"wide model band (~{width:.0f}% of centre) — near-term uncertainty is material")
+        if not risk_bits:
+            risk_bits.append("short-term volatility can still dominate any model path")
+        insights.append({
+            "key": "risk",
+            "label": "Risk",
+            "text": "; ".join(risk_bits).capitalize() + ".",
+        })
+
+        # Explanation paragraph(s)
+        explanation_parts = []
+        if range_high is not None and range_low is not None and range_centre is not None:
+            explanation_parts.append(
+                f"According to Kronos, {ticker} is projected to trade between "
+                f"{range_low:.2f} and {range_high:.2f} over the next {pred_len} trading days, "
+                f"with a mean path around {range_centre:.2f} "
+                f"({pct:+.2f}% from the last close of {last_close:.2f})."
+            )
+        else:
+            explanation_parts.append(
+                f"{ticker}: last close {last_close:.2f} → model path {forecast_close:.2f} "
+                f"over {pred_len} sessions ({pct:+.2f}%)."
+            )
+        if analyst_target:
+            explanation_parts.append(
+                f"The analyst mean target of {analyst_target:.2f} is a longer-horizon consensus "
+                f"reference and may sit well above or below the near-term model band."
+            )
+        explanation_parts.append(
+            "This outlook is based on historical prices (plus light context signals when available). "
+            "It is not financial advice and does not account for every news or macro shock."
+        )
+        explanation = " ".join(explanation_parts)
+
         _finish_forecast_job(job_id, status="done", result={
             "text": result_text,
             "ticker": ticker,
+            "name": company_name,
+            "sector": sector,
             "image_path": image_path,
             "context_signal": ctx_dict,
             "last_close": last_close,
@@ -267,6 +364,9 @@ def _run_forecast_ticker_job(job_id, ticker, pred_len, lookback, detailed):
             "analyst_target": analyst_target,
             "pred_len": pred_len,
             "n_runs": fc.get("n_runs", 1),
+            "pct_change": pct,
+            "insights": insights,
+            "explanation": explanation,
         })
     except TickerNotFoundError as e:
         _finish_forecast_job(job_id, status="error", error=str(e))
@@ -993,6 +1093,8 @@ def forecast_job(job_id):
         "status": "done",
         "text": result["text"],
         "ticker": result["ticker"],
+        "name": result.get("name"),
+        "sector": result.get("sector"),
         "image_url": _to_url(result.get("image_path")),
         "context_signal": result.get("context_signal"),
         "last_close": result.get("last_close"),
@@ -1002,6 +1104,9 @@ def forecast_job(job_id):
         "analyst_target": result.get("analyst_target"),
         "pred_len": result.get("pred_len"),
         "n_runs": result.get("n_runs"),
+        "pct_change": result.get("pct_change"),
+        "insights": result.get("insights") or [],
+        "explanation": result.get("explanation") or result.get("text"),
     })
 
 

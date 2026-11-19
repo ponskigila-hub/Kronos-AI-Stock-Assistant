@@ -133,48 +133,120 @@
   }
 
   function showResult(data) {
-    if (resultTag) resultTag.textContent = data.ticker || "";
+    var section = document.getElementById("resultSection");
+    if (section) section.style.display = "";
+
+    var ticker = data.ticker || "";
+    if (resultTag) resultTag.textContent = ticker;
+    var elTicker = document.getElementById("fcTicker");
+    if (elTicker) elTicker.textContent = ticker;
+
+    var elName = document.getElementById("fcName");
+    if (elName) elName.textContent = data.name || "";
+
+    var elSector = document.getElementById("fcSector");
+    if (elSector) {
+      if (data.sector) {
+        elSector.textContent = data.sector;
+        elSector.hidden = false;
+      } else {
+        elSector.hidden = true;
+      }
+    }
+
+    var horizon = data.pred_len ? (data.pred_len + "D forecast") : "Forecast";
+    var elHorizon = document.getElementById("fcHorizon");
+    if (elHorizon) elHorizon.textContent = horizon;
+    var elBadge = document.getElementById("fcChartBadge");
+    if (elBadge) elBadge.textContent = horizon;
+    var elTitle = document.getElementById("fcChartTitle");
+    if (elTitle) {
+      elTitle.textContent =
+        ticker +
+        " — Kronos outlook · next " +
+        (data.pred_len || "—") +
+        " trading days" +
+        (data.n_runs && data.n_runs > 1 ? " (" + data.n_runs + " paths)" : "");
+    }
+
     if (resultText) resultText.textContent = data.text || "";
     renderContextBadges(data.context_signal || null);
 
-    // Outlook KPI strip
     var kpis = document.getElementById("outlookKpis");
-    var legend = document.getElementById("outlookLegend");
     if (kpis) {
       var hasRange = data.range_high != null || data.range_centre != null || data.range_low != null;
-      if (hasRange || data.analyst_target != null) {
-        var elH = document.getElementById("kpiHigh");
-        var elC = document.getElementById("kpiCentre");
-        var elL = document.getElementById("kpiLow");
-        var elA = document.getElementById("kpiAnalyst");
-        if (elH) elH.textContent = fmt(data.range_high);
-        if (elC) elC.textContent = fmt(data.range_centre);
-        if (elL) elL.textContent = fmt(data.range_low);
-        if (elA) elA.textContent = fmt(data.analyst_target);
-        kpis.style.display = "grid";
-        if (legend) legend.style.display = "flex";
+      var elH = document.getElementById("kpiHigh");
+      var elC = document.getElementById("kpiCentre");
+      var elL = document.getElementById("kpiLow");
+      var elA = document.getElementById("kpiAnalyst");
+      if (elH) elH.textContent = fmt(data.range_high);
+      if (elC) elC.textContent = fmt(data.range_centre);
+      if (elL) elL.textContent = fmt(data.range_low);
+      if (elA) elA.textContent = fmt(data.analyst_target);
+      kpis.style.display = hasRange || data.analyst_target != null ? "grid" : "none";
+    }
+
+    var insights = data.insights || [];
+    var list = document.getElementById("fcInsights");
+    if (list) {
+      if (insights.length) {
+        list.innerHTML = insights
+          .map(function (row) {
+            var key = (row.key || "").toLowerCase();
+            var icon = key === "risk" ? "!" : key === "analyst" ? "◎" : "↗";
+            return (
+              '<li class="fc-insight fc-insight-' +
+              (key || "other") +
+              '">' +
+              '<span class="fc-insight-icon" aria-hidden="true">' +
+              icon +
+              "</span>" +
+              '<div class="fc-insight-body">' +
+              '<span class="fc-insight-label">' +
+              (row.label || "Insight") +
+              "</span>" +
+              '<span class="fc-insight-text">' +
+              (row.text || "") +
+              "</span></div></li>"
+            );
+          })
+          .join("");
+      } else if (data.text) {
+        list.innerHTML =
+          '<li class="fc-insight"><div class="fc-insight-body">' +
+          '<span class="fc-insight-label">Outlook</span>' +
+          '<span class="fc-insight-text">' +
+          data.text +
+          "</span></div></li>";
       } else {
-        kpis.style.display = "none";
-        if (legend) legend.style.display = "none";
+        list.innerHTML = "";
       }
     }
 
-    if (chartFrame) {
-      if (data.image_url) {
-        chartFrame.style.display = "";
-        chartFrame.innerHTML =
-          '<img src="' + data.image_url + '" alt="Forecast chart for ' +
-          (data.ticker || "") + '">';
-      } else {
-        chartFrame.style.display = "none";
-        chartFrame.innerHTML = "";
-      }
+    var expl = document.getElementById("fcExplanation");
+    if (expl) expl.textContent = data.explanation || data.text || "";
+
+    // Chart image
+    var frame = document.getElementById("chartFrame");
+    var wrap = document.getElementById("fcChartWrap");
+    if (data.image_url && frame) {
+      frame.innerHTML =
+        '<img src="' +
+        data.image_url +
+        '" alt="Forecast chart for ' +
+        (ticker || "ticker") +
+        '">';
+      frame.style.display = "block";
+      if (wrap) wrap.style.display = "block";
     }
-    if (resultSection) {
-      resultSection.style.display = "";
-      resultSection.scrollIntoView({ behavior: "smooth", block: "start" });
+
+    if (section) {
+      try {
+        section.scrollIntoView({ behavior: "smooth", block: "start" });
+      } catch (e) {}
     }
   }
+
 
   function pollJob(jobId, form, submitBtn, originalBtnText) {
     fetch("/forecast/job/" + jobId)
