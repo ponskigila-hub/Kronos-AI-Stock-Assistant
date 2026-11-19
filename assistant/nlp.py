@@ -16,21 +16,6 @@ INTENT_PATTERNS = [
     ("backtest", re.compile(r"\bbacktest\b|\bback-test\b|\bback test\b", re.I)),
     ("earnings", re.compile(r"\bearnings\b|\breport(s)? date\b|\bwhen.*report\b", re.I)),
     ("analyst", re.compile(r"\banalyst|\bprice target|\brating\b|\bconsensus\b", re.I)),
-    ("technicals", re.compile(
-        r"\btechnicals?\b|\btechnical analysis\b|\bsupport and resistance\b|"
-        r"\bmomentum (on|for)\b|\bprice and volume\b",
-        re.I)),
-    ("dig_financials", re.compile(
-        r"\bdig\s+(through\s+)?(the\s+)?financials?\b|\bfinancial\s+statements?\b|"
-        r"\bincome\s+statement\b|\bbalance\s+sheet\b|\bcash\s+flow\s+statement\b|"
-        r"\banalyz(?:e|ing)\s+financials?\b",
-        re.I)),
-    ("wall_street", re.compile(
-        r"\bwall.?street\b|\bfull\s+(wall.?street\s+)?breakdown\b|"
-        r"\bequity\s+analyst\b|\bfull\s+analysis\b|\bresearch\s+report\b|"
-        r"\bbreak\s*down\b.*\b(stock|ticker|company)\b|"
-        r"\b(company|stock)\s+breakdown\b|\bdeep\s+dive\b",
-        re.I)),
     ("fundamentals", re.compile(r"\bfundamental|\bp/?e ratio\b|\bmarket cap\b|\bvaluation\b|\beps\b|\brevenue\b", re.I)),
     ("opinion", re.compile(
         r"\bshould i (buy|sell|invest)\b|"
@@ -115,7 +100,7 @@ def parse_intent(text, context=None):
     # (e.g. "why is it moving?", "compare with Microsoft"). Plain conversational
     # questions such as "what do you think?" and "how does this app work?"
     # should stay general and not trigger a forecast out of the blue.
-    followup_intents = {"why", "compare", "risk", "news", "history", "fundamentals", "analyst", "earnings", "opinion", "watchlist_show", "wall_street", "dig_financials", "technicals"}
+    followup_intents = {"why", "compare", "risk", "news", "history", "fundamentals", "analyst", "earnings", "opinion", "watchlist_show"}
     if not tickers and intent in followup_intents and context is not None and context.last_tickers:
         tickers = list(context.last_tickers)
     elif intent == "compare" and len(tickers) == 1 and context is not None and context.last_tickers:
