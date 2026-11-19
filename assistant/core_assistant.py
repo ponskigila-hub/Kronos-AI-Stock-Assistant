@@ -109,10 +109,6 @@ class StockAssistant:
             return [f"Forecast {t}", f"Fundamentals of {t}"]
         if intent == "backtest" and t:
             return [f"Forecast {t}", f"Why is {t} moving that way?"]
-        if intent == "dig_financials" and t:
-            return [f"Wall Street breakdown {t}", f"Forecast {t}", f"Fundamentals of {t}"]
-        if intent == "wall_street" and t:
-            return [f"Forecast {t}", f"Analyst targets for {t}", f"What risks for {t}?"]
         if intent == "fundamentals" and t:
             return [f"Earnings date for {t}", f"Analyst targets for {t}", f"Forecast {t}"]
         if intent == "opinion" and t:
@@ -439,70 +435,6 @@ class StockAssistant:
         data = fundamentals.get_fundamentals(ticker)
         text = fundamentals.format_fundamentals_text(data)
         return {"text": text, "chart": None, "data": {"ticker": ticker, "fundamentals": data}}
-
-
-
-    def _technicals(self, tickers):
-        if not tickers:
-            return {"text": "Which ticker? e.g. `technicals AAPL`", "chart": None, "data": {}}
-        from . import technical_analysis as ta
-        report = ta.analyze_technicals(tickers[0])
-        return {
-            "text": report.get("text") or "No technical data.",
-            "chart": None,
-            "data": {"ticker": tickers[0], "kind": "technicals"},
-        }
-
-    def _dig_financials(self, tickers):
-        if not tickers:
-            return {"text": "Which ticker should I dig into? e.g. `dig through financials AAPL`", "chart": None, "data": {}}
-        ticker = tickers[0]
-        from . import financials_dig
-        report = financials_dig.dig_financials(ticker)
-        return {
-            "text": report.get("text") or f"No statement data for {ticker}.",
-            "chart": None,
-            "data": {"ticker": ticker, "kind": "financials_dig", "flags": report.get("flags")},
-        }
-
-    def _wall_street_breakdown(self, tickers):
-        """Full equity-analyst style research note (business model → monitorables)."""
-        if not tickers:
-            return {
-                "text": "Which ticker should I run a Wall Street-style breakdown on? e.g. `full analysis AAPL`",
-                "chart": None,
-                "data": {},
-            }
-        ticker = tickers[0]
-        from . import deep_research
-        report = deep_research.build_wall_street_breakdown(ticker)
-        text = report.get("text") or f"No breakdown available for {ticker}."
-        # Optional Gemini polish — keep numbers intact, smoother prose only
-        try:
-            from . import llm as llm_mod
-            polished = llm_mod.polish_explanation(text, beginner=True)
-            if polished:
-                text = polished
-        except Exception:
-            pass
-        return {
-            "text": text,
-            "chart": None,
-            "data": {
-                "ticker": ticker,
-                "kind": "wall_street_breakdown",
-                "business": report.get("business"),
-                "growth": report.get("growth"),
-                "margins": report.get("margins"),
-                "cash": report.get("cash"),
-                "earnings": report.get("earnings"),
-                "analyst": report.get("analyst"),
-                "catalysts": report.get("catalysts"),
-                "risks": report.get("risks"),
-                "monitor": report.get("monitor"),
-            },
-        }
-
 
     def _opinion(self, context, tickers):
         """
