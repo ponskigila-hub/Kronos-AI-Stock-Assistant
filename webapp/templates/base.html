@@ -46,11 +46,11 @@
           </a>
           <a href="{{ url_for('valuation') }}" class="{{ 'active' if active == 'valuation' }}" role="menuitem">
             <span class="nav-dd-title">Valuation</span>
-            <span class="nav-dd-desc">Relative peer check</span>
+            <span class="nav-dd-desc">Competitors · growth · margins</span>
           </a>
           <a href="{{ url_for('research_page') }}" class="nav-dd-item" role="menuitem">
-            <span class="nav-dd-title">Research desk</span>
-            <span class="nav-dd-desc">Compare · thesis · templates</span>
+            <span class="nav-dd-title">Research Hub</span>
+            <span class="nav-dd-desc">Research Hub · tabs</span>
           </a>
           <a href="{{ url_for('insights_page') }}" class="nav-dd-item" role="menuitem">
             <span class="nav-dd-title">Fundamentals</span>
@@ -59,12 +59,16 @@
         </div>
       </div>
 
-      <div class="nav-group {{ 'active' if active in ['invest','watchlist','simulation'] }}">
+      <div class="nav-group {{ 'active' if active in ['stock','invest','watchlist','simulation'] }}">
         <button type="button" class="nav-group-btn" aria-expanded="false" aria-haspopup="true">
           Portfolio
           <svg class="nav-chevron" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
         </button>
         <div class="nav-dropdown" role="menu">
+          <a href="{{ url_for('stock_page') }}" class="{{ 'active' if active == 'stock' }}" role="menuitem">
+            <span class="nav-dd-title">Stock</span>
+            <span class="nav-dd-desc">Price, chart &amp; performance</span>
+          </a>
           <a href="{{ url_for('invest_page') }}" class="{{ 'active' if active == 'invest' }}" role="menuitem">
             <span class="nav-dd-title">Invest plan</span>
             <span class="nav-dd-desc">Entry zone &amp; sell targets</span>
@@ -101,6 +105,11 @@
     </nav>
 
     <div class="topbar-actions">
+      <div class="tool-search-wrap" id="toolSearchWrap">
+        <input type="search" id="toolSearch" class="tool-search" placeholder="Search tools… (Ctrl+K)"
+               autocomplete="off" aria-label="Search tools" aria-controls="toolSearchResults">
+        <div class="tool-search-results" id="toolSearchResults" role="listbox" hidden></div>
+      </div>
       <div class="market-clocks" id="marketClocks" title="Session status in your local time">
         <div class="mkt-pill" data-mkt="us">
           <span class="mkt-dot" id="usDot"></span>
@@ -123,6 +132,11 @@
   </header>
   <div class="nav-backdrop" id="navBackdrop"></div>
 
+  <div class="wl-ticker-strip" id="wlTickerStrip" hidden>
+    <div class="wl-ticker-strip-inner" id="wlTickerStripInner"></div>
+    <a class="wl-ticker-strip-more" href="/watchlist">Watchlist →</a>
+  </div>
+
   <main class="main {% block main_class %}{% endblock %}">
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
@@ -142,6 +156,7 @@
   <script src="{{ url_for('static', filename='js/markets.js') }}"></script>
   <script src="{{ url_for('static', filename='js/app.js') }}"></script>
   <script src="{{ url_for('static', filename='js/ticker-chart.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/wl-strip.js') }}"></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>
